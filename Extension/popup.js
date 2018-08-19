@@ -11,7 +11,7 @@ saveBtn.addEventListener('click',function() {
 	let youtubeVideoUrl = "";
 	chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
 		let activeTab = tabs[0];
-		SendRequest('http:localhost:2905/',activeTab.url);
+		SendRequest('http:localhost:2905/post',activeTab.url);
 	});	
 });
 

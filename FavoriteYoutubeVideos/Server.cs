@@ -21,43 +21,24 @@ namespace FavoriteYoutubeVideos
                     Console.WriteLine("Waiting for connection...");
                     var context = listener.GetContext();
 
-                    try
+                    string requestBody;
+
+                    using (var inputStream = context.Request.InputStream)
+                    using (var reader = new StreamReader(inputStream, Encoding.UTF8))
                     {
-                        Console.WriteLine("Connected!");
-                        string page = context.Request.RawUrl;
-                        Console.WriteLine(page);
-
-                        if (page == "/")
-                        {
-                            string request = GetRequest(context);
-                            var video = new YoutubeVideo(request);
-
-                            SaveUrl(video.Title, video.Url, video.Description, video.ThumbnailUrl, video.UploadedBy);
-
-                        } else if (page == "/videos")
-                        {
-                            string response = GetResponse();
-                            context.Response.ContentLength64 = Encoding.UTF8.GetByteCount(response);
-                            context.Response.StatusCode = (int)HttpStatusCode.OK;
-                            using (Stream stream = context.Response.OutputStream)
-                            {
-                                using (StreamWriter writer = new StreamWriter(stream))
-                                {
-                                    writer.Write(response);
-                                }
-                            }
-                        } else if (page == "/delete")
-                        {
-                            string request = GetRequest(context);
-                            DeleteVideo(int.Parse(request));
-
-                        }
+                        requestBody = reader.ReadToEnd();
                     }
-                    catch (Exception e)
-                    {
-                        Console.WriteLine(e.Message);
-                        Console.WriteLine(e);
-                    }
+                    
+                    string responseBody = MakeResponseBody(context,requestBody);
+
+                    context.Response.StatusCode = (int)HttpStatusCode.OK;
+
+                    var buffer = Encoding.UTF8.GetBytes(responseBody);
+
+                    context.Response.ContentLength64 = buffer.Length;
+
+                    context.Response.OutputStream.Write(buffer, 0, buffer.Length);
+                    context.Response.Close();
                 }
             }
             catch (Exception e)
@@ -66,52 +47,42 @@ namespace FavoriteYoutubeVideos
             }
         }
 
-        private static string GetResponse()
+        private static string MakeResponseBody(HttpListenerContext context,string requestBody)
         {
-            string response = string.Empty;
+            string page = context.Request.RawUrl;
+            if (page == "/post")
+            {
+                return SaveUrl(new YoutubeVideo(requestBody));
 
+            } else if (page == "/videos")   
+            {
+                return GetAllVideosInHtml();
+            }
+
+
+            return "No info found";
+        }
+
+        private static string GetAllVideosInHtml()
+        {
             using (var conn = new NpgsqlConnection(@"Server=vm5;Port=5437;Database=video_library_db;Uid=postgres;Pwd=9ae51c68-c9d6-40e8-a1d6-a71be968ba3e;"))
             {
                 conn.Open();
                 var database = new Database(conn);
 
-                var videos = database.Query<VideoPoco>("SELECT * FROM videos WHERE deleted=@d ORDER BY video_id DESC",new NpgsqlParameter("d",false));
-                int count = 1;
+                var videos = database.Query<VideoPoco>("SELECT * FROM videos WHERE deleted=@d ORDER BY video_id DESC", new NpgsqlParameter("d", false));
 
                 var videosInList = new List<string>();
                 foreach (var videoPoco in videos)
                 {
-                    /*if (count % 2 == 0)
-                    {
-                        response += "<div class='video'>";
-                    }
-                    else
-                    {
-                        response += "<div class='video' style='background-color: GhostWhite;'>";
-                    }
-
-                    count++;
-
-                    response += $"<div><h2><a href='#' class='title' url-src='{videoPoco.Url}'> {videoPoco.Title} </a> </h2><a class='delete-btn' href='#' video-id='{videoPoco.VideoId}'>X</a></div>";
-                    string thumbSrc = videoPoco.ThumbnailUrl != "no thumb url" ? videoPoco.ThumbnailUrl : "https://i.ytimg.com/vi/aaaaaaaaaaa/default.jpg";
-                    response += $"<img class='thumbnail' src='{thumbSrc}' title='{videoPoco.ChannelName}'/>";
-                    string description = videoPoco.Description.Length > 60
-                        ? videoPoco.Description.Substring(0, 60).Trim() + "..."
-                        : videoPoco.Description.Trim();
-                    response += $"<p style='width: 500px'>{description}</p></div>";
-                    */
-                    
-                    videosInList.Add(HtmlVideo.Create(videoPoco.Title,videoPoco.ChannelName,videoPoco.ThumbnailUrl,videoPoco.Description));
+                    videosInList.Add(HtmlVideo.Create(videoPoco.Title, videoPoco.ChannelName, videoPoco.ThumbnailUrl, videoPoco.Description));
                 }
 
-                response = HtmlDocument.Create(videosInList);
+                return HtmlDocument.Create(videosInList);
             }
-
-
-            return response;
         }
 
-        private static void SaveUrl(string title,string url,string description,string thumbnailUrl,string channelName)
+        private static string SaveUrl(YoutubeVideo video)
         {
             string connectionString = @"Server=vm5;Port=5437;Database=video_library_db;Uid=postgres;Pwd=9ae51c68-c9d6-40e8-a1d6-a71be968ba3e;";
             using (var connection = new NpgsqlConnection(connectionString))
@@ -121,15 +92,15 @@ namespace FavoriteYoutubeVideos
 
                 var parametars = new []
                 {
-                    new NpgsqlParameter("t", title),
-                    new NpgsqlParameter("u", url),
-                    new NpgsqlParameter("d", description),
-                    new NpgsqlParameter("h", thumbnailUrl),
-                    new NpgsqlParameter("c", channelName) 
+                    new NpgsqlParameter("t", video.Title),
+                    new NpgsqlParameter("u", video.Url),
+                    new NpgsqlParameter("d", video.Description),
+                    new NpgsqlParameter("h", video.ThumbnailUrl),
+                    new NpgsqlParameter("c", video.UploadedBy) 
 
                 };
 
-                var listOfVideos = database.Query<VideoPoco>("SELECT * FROM videos WHERE title=@t AND url=@u", new NpgsqlParameter("t", title), new NpgsqlParameter("u", url));
+                var listOfVideos = database.Query<VideoPoco>("SELECT * FROM videos WHERE title=@t AND url=@u", new NpgsqlParameter("t", video.Title), new NpgsqlParameter("u", video.Url));
 
                 if (listOfVideos.Count < 1)
                 {
@@ -140,6 +111,8 @@ namespace FavoriteYoutubeVideos
                     Console.WriteLine("There is already video with the same url in the database!");
                 }
             }
+
+            return "Saved: " + video.Url;
         }
 
         private static void DeleteVideo(int id)
@@ -154,19 +127,6 @@ namespace FavoriteYoutubeVideos
                     new NpgsqlParameter("d", true), new NpgsqlParameter("i", id));
                 Console.WriteLine(result);
             }
-        }
-
-        private static string GetRequest(HttpListenerContext context)
-        {
-            var request = context.Request;
-            string text;
-            using (var reader = new StreamReader(request.InputStream,
-                request.ContentEncoding))
-            {
-                text = reader.ReadToEnd();
-            } 
-
-            return text;
         }
     }
 }
